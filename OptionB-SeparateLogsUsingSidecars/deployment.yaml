@@ -1,0 +1,76 @@
+kind: Deployment
+apiVersion: apps/v1
+metadata:
+  name: nginx
+  namespace: 2917-cmap-dev
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      ## Init container used to re-create the system link since it breaks when attaching the empty volume.
+      ## Creates "/var/log/nginx/access.log -> /dev/stdout"
+      initContainers:
+        - name: init-nginx-create-symlink
+          image: busybox:latest
+          command:
+            - sh
+            - -c
+            - |
+               #!/bin/sh
+               mkdir -p /var/log/nginx
+               ln -s /dev/stdout /var/log/nginx/access.log
+          # Same shared volume to be used in main application and sidecar
+          volumeMounts:
+          - name: shared-volume
+            mountPath: /var/log/nginx
+
+      containers:
+          # This is the the main application. NGINX in our case. Only the access.log will be sent to stdout per initcontainer
+        - name: nginx
+          ## Update with your uploaded image from Containerfile
+          image: 'yourregistry.com/user/nginx:latest'
+          terminationMessagePath: /dev/termination-log
+          volumeMounts:
+            - name: shared-volume
+              mountPath: /var/log/nginx
+
+          # This is the sidecar container that will tail "error.log" via the shell script "sidecarlogging.sh"
+          # PREREQUISITE - The exact name of the shell script is declared in Dynatrace for it to be accepted
+          # Due to OCP restrictions, placing script in volume mount path. Better practice to bake it into a custom image.
+          # Using newer UBI image instead of busybox due to tail command in UBI having more flags/newer.
+        - name: errorlog
+          image: 'registry.access.redhat.com/ubi9-minimal:9.3-1612'
+          command:
+            - "/bin/bash"
+            - "-c"
+            - |
+               echo -e '#!/bin/bash\ntail --follow=name -n 100 --retry /var/log/nginx/error.log' > /var/log/nginx/sidecarlogging.sh
+               chmod 775 /var/log/nginx/sidecarlogging.sh
+               /var/log/nginx/sidecarlogging.sh
+          volumeMounts:
+            - name: shared-volume
+              mountPath: /var/log/nginx
+              
+      volumes:
+         - name: shared-volume
+           emptyDir: {}
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 25%
+      maxSurge: 25%
+  revisionHistoryLimit: 10
+  progressDeadlineSeconds: 600
