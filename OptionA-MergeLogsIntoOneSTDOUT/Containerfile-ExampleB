@@ -1,0 +1,43 @@
+## Built with "podman build --no-cache -t nginx:latest -f Containerfile-ExampleB ."
+## can also "podman push localhost/ubi9.3-1612:latest registry.com/username/imageName:YourRemoteNewTag
+
+FROM docker.io/library/nginx:1.25.3
+
+## This is due to some OpenShift clusters being restrictive with the permissions/ownership (DEMO ONLY - dont do this in prod)
+USER root
+RUN chown -R nginx:0 /var/cache/nginx /var/run/ && \
+    chmod -R 775 /var/log/nginx /var/cache/nginx /var/run/ && \
+    sed -i 's/80/8080/g' /etc/nginx/conf.d/default.conf
+
+
+## Prerequisite: In Dynatrace UI, declare "extralogging" as a process in "Declarative Process Grouping" (One time per Dynatrace cluster)
+## Requirement: Shell script to be named "extralogging.sh" for Dynatrace to recognize it
+### Due to Dynatrace design to recognize only "known technologies" or "high cpu consuming processes"
+# /var/log/dpkg.log does not display in stdout, which is why we're tailing it here
+RUN echo -e '#!/bin/bash\ntail --follow=name -n 100 --retry /var/log/dpkg.log' > /usr/local/bin/extralogging.sh && \
+    chmod 775 /usr/local/bin/extralogging.sh
+
+## 1 - Execute your application or startup script
+## 2 - execute the "extralogging.sh" script so dynatrace can recognize it
+### Logic: First process will run in background and the PID will get saved. If first process exists, then container will stop.
+### If you want to exit if BOTH processes exit, then just use "wait" by itself
+CMD ["/bin/bash", "-c", "nginx -g 'daemon off;' & pid=$!; /usr/local/bin/extralogging.sh & wait $pid"]
+
+#### EXAMPLE OUTPUT:
+## $ podman run -it localhost/nginx:latest 
+#
+## *** THIS IS THE LOG FROM /var/log/dpkg.log (tail)
+# 2024-02-13 01:53:34 status half-configured nginx-module-image-filter:amd64 1.25.3-1~bookworm
+# 2024-02-13 01:53:34 status installed nginx-module-image-filter:amd64 1.25.3-1~bookworm
+# 2024-02-13 01:53:34 trigproc libc-bin:amd64 2.36-9+deb12u4 <none>
+# 2024-02-13 01:53:34 status half-configured libc-bin:amd64 2.36-9+deb12u4
+# 2024-02-13 01:53:34 status installed libc-bin:amd64 2.36-9+deb12u4
+## *** THIS IS THE LOG FROM /var/log/nginx/access.log (nginx app)
+# 2024/05/13 21:54:57 [notice] 7#7: using the "epoll" event method
+# 2024/05/13 21:54:57 [notice] 7#7: nginx/1.25.3
+# 2024/05/13 21:54:57 [notice] 7#7: built by gcc 12.2.0 (Debian 12.2.0-14) 
+# 2024/05/13 21:54:57 [notice] 7#7: OS: Linux 4.18.0-513.18.1.el8_9.x86_64
+# 2024/05/13 21:54:57 [notice] 7#7: getrlimit(RLIMIT_NOFILE): 262144:262144
+# 2024/05/13 21:54:57 [notice] 7#7: start worker processes
+# 2024/05/13 21:54:57 [notice] 7#7: start worker process 11
+# 2024/05/13 21:54:57 [notice] 7#7: start worker process 12

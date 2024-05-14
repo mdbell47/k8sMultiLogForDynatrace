@@ -1,0 +1,36 @@
+## View ExampleB for more real world example. This example is supposed to be more detailed/illustrative:
+
+## Built with "podman build -t ubi9.3-1612 ."
+## can also "podman push localhost/ubi9.3-1612:latest registry.com/username/imageName:YourRemoteNewTag
+
+FROM registry.access.redhat.com/ubi9-minimal:9.3-1612
+
+RUN microdnf update -y && microdnf install -y procps iproute util-linux
+
+## This would be your application related things. So maybe you would execute nginx in the CMD/ENTRYPOINT
+RUN echo -e '#!/bin/bash\nwhile true; do echo "First log in stdout: $(date)" && echo "Second log in /tmp/second.log: $(date)" >> /tmp/second.log; sleep 30; done' > /usr/local/bin/yourapplication.sh && \
+    chmod 775 /usr/local/bin/yourapplication.sh
+
+## Prerequisite: In Dynatrace UI, declare "extralogging" as a process in "Declarative Process Grouping"
+## Requirement: Shell script to be named "extralogging.sh" for Dynatrace to recognize it
+### Due to Dynatrace design to recognize only "known technologies" or "high cpu consuming processes"
+RUN echo -e '#!/bin/bash\ntail --follow=name -n 100 --retry /tmp/second.log' > /usr/local/bin/extralogging.sh && \
+    chmod 775 /usr/local/bin/extralogging.sh
+
+## 1 - Execute your application (change logic to run in background with log pointing to /dev/stdout)
+## 2 - execute the "extralogging.sh" script so dynatrace can recognize it
+CMD ["/bin/bash", "-c", "/usr/local/bin/yourapplication.sh & /usr/local/bin/extralogging.sh"]
+
+## Only the output from "extralogging.sh" will end up in dynatrace even though k8s/container will show both script log outputs UNLESS the first log is a "known technology" such as nginx, apache, tomcat, etc.
+## OUTPUT EXAMPLE:
+# $ podman run -it localhost/ubi9.3-1612:latest 
+# OUTPUT:
+#
+# tail: cannot open '/tmp/second.log' for reading: No such file or directory
+# First log in stdout: Wed May  8 17:50:51 UTC 2024
+# tail: '/tmp/second.log' has appeared;  following new file
+# Second log in /tmp/second.log: Wed May  8 17:50:51 UTC 2024
+# First log in stdout: Wed May  8 17:51:21 UTC 2024
+# Second log in /tmp/second.log: Wed May  8 17:51:21 UTC 2024
+# First log in stdout: Wed May  8 17:51:51 UTC 2024
+# Second log in /tmp/second.log: Wed May  8 17:51:51 UTC 2024
